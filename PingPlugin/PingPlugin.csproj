@@ -15,6 +15,8 @@
   <PropertyGroup>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <PlatformTarget>x64</PlatformTarget>
+    <AssemblyVersion>1.13.0.0</AssemblyVersion>
+    <FileVersion>1.13.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -28,24 +30,13 @@
 
   <ItemGroup>
     <Reference Include="Dalamud">
-      <HintPath Condition="Exists('..\..\Dalamud\bin\Debug')">..\..\Dalamud\bin\Debug\Dalamud.dll</HintPath>
-      <Private>false</Private>
+      <HintPath>..\..\..\Dalamud\Dalamud.Updater\bin\Release\6.0.0.0\Dalamud.dll</HintPath>
     </Reference>
     <Reference Include="ImGui.NET">
-      <HintPath Condition="Exists('..\..\Dalamud\bin\Debug')">..\..\Dalamud\bin\Debug\ImGui.NET.dll</HintPath>
-      <Private>false</Private>
+      <HintPath>..\..\..\Dalamud\Dalamud.Updater\bin\Release\6.0.0.0\ImGui.NET.dll</HintPath>
     </Reference>
     <Reference Include="ImGuiScene">
-      <HintPath Condition="Exists('..\..\Dalamud\bin\Debug')">..\..\Dalamud\bin\Debug\ImGuiScene.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Newtonsoft.Json">
-      <HintPath Condition="Exists('..\..\Dalamud\bin\Debug')">..\..\Dalamud\bin\Debug\Newtonsoft.Json.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="CheapLoc">
-      <HintPath Condition="Exists('..\..\Dalamud\bin\Debug')">..\..\Dalamud\bin\Debug\CheapLoc.dll</HintPath>
-      <Private>false</Private>
+      <HintPath>..\..\..\Dalamud\Dalamud.Updater\bin\Release\6.0.0.0\ImGuiScene.dll</HintPath>
     </Reference>
   </ItemGroup>
 
@@ -63,6 +54,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="CheapLoc" Version="1.1.6" />
     <PackageReference Include="DalamudPackager" Version="2.1.2" />
   </ItemGroup>
 
