@@ -20,6 +20,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Remove="PingUI.cs~RF60cb0e7.TMP" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="..\Assets\icon.png" Link="images\icon.png">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
