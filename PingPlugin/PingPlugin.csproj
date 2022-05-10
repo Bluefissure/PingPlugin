@@ -3,7 +3,7 @@
   <PropertyGroup>
     <TargetFramework>net5.0-windows</TargetFramework>
     <LangVersion>9.0</LangVersion>
-    <Version>1.14.1.0</Version>
+    <Version>2.2.2.0</Version>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)'=='Release'">
@@ -15,13 +15,7 @@
   <PropertyGroup>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <PlatformTarget>x64</PlatformTarget>
-    <AssemblyVersion>1.14.1.0</AssemblyVersion>
-    <FileVersion>1.14.1.0</FileVersion>
   </PropertyGroup>
-
-  <ItemGroup>
-    <None Remove="PingUI.cs~RF60cb0e7.TMP" />
-  </ItemGroup>
 
   <ItemGroup>
     <Content Include="..\Assets\icon.png" Link="images\icon.png">
@@ -30,6 +24,37 @@
     <Content Include="..\Assets\image1.png" Link="images\image1.png">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Dalamud">
+      <HintPath>$(AppData)\XIVLauncher\addon\Hooks\dev\Dalamud.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ImGui.NET">
+      <HintPath>$(AppData)\XIVLauncher\addon\Hooks\dev\ImGui.NET.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ImGuiScene">
+      <HintPath>$(AppData)\XIVLauncher\addon\Hooks\dev\ImGuiScene.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(AppData)\XIVLauncher\addon\Hooks\dev\Newtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="CheapLoc">
+      <HintPath>$(AppData)\XIVLauncher\addon\Hooks\dev\CheapLoc.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+	<Reference Include="Lumina">
+      <HintPath>$(AppData)\XIVLauncher\addon\Hooks\dev\Lumina.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Lumina.Excel">
+      <HintPath>$(AppData)\XIVLauncher\addon\Hooks\dev\Lumina.Excel.dll</HintPath>
+      <Private>False</Private>
+	</Reference>
   </ItemGroup>
 
   <ItemGroup>
@@ -46,20 +71,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="CheapLoc" Version="1.1.6" />
     <PackageReference Include="DalamudPackager" Version="2.1.2" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Reference Include="Dalamud">
-      <HintPath>..\..\..\Dalamud\Dalamud.Updater\bin\Release\6.0.0.14\Dalamud.dll</HintPath>
-    </Reference>
-    <Reference Include="ImGui.NET">
-      <HintPath>..\..\..\Dalamud\Dalamud.Updater\bin\Release\6.0.0.14\ImGui.NET.dll</HintPath>
-    </Reference>
-    <Reference Include="ImGuiScene">
-      <HintPath>..\..\..\Dalamud\Dalamud.Updater\bin\Release\6.0.0.14\ImGuiScene.dll</HintPath>
-    </Reference>
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">

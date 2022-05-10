@@ -1,10 +1,12 @@
-﻿using Dalamud.Game;
+﻿using Dalamud.Game.ClientState;
 using Dalamud.Game.Command;
+using Dalamud.Game.Gui.Dtr;
 using Dalamud.IoC;
 using Dalamud.Logging;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
 using PingPlugin.Attributes;
+using PingPlugin.GameAddressDetectors;
 using PingPlugin.PingTrackers;
 using System;
 using System.Dynamic;
@@ -15,20 +17,24 @@ namespace PingPlugin
     {
         [PluginService]
         [RequiredVersion("1.0")]
-        private DalamudPluginInterface PluginInterface { get; init; }
+        public static DalamudPluginInterface PluginInterface { get; set; }
 
         [PluginService]
         [RequiredVersion("1.0")]
-        private SigScanner SigScanner { get; init; }
+        public static CommandManager Commands { get; set; }
 
         [PluginService]
         [RequiredVersion("1.0")]
-        private CommandManager Commands { get; init; }
+        public static ClientState ClientState { get; set; }
+
+        [PluginService]
+        [RequiredVersion("1.0")]
+        public static DtrBar DtrBar { get; set; }
 
         private readonly PluginCommandManager<PingPlugin> pluginCommandManager;
         private readonly PingConfiguration config;
 
-        private readonly AggregatePingTracker pingTracker;
+        private readonly PingTracker pingTracker;
         private readonly PingUI ui;
 
         internal ICallGateProvider<object, object> IpcProvider;
@@ -40,14 +46,12 @@ namespace PingPlugin
             this.config = (PingConfiguration)PluginInterface.GetPluginConfig() ?? new PingConfiguration();
             this.config.Initialize(PluginInterface);
 
-            this.pingTracker = new AggregatePingTracker(this.config,
-                new ComponentModelPingTracker(this.config),
-                new Win32APIPingTracker(this.config),
-                new TrampolinePingTracker(this.config, SigScanner));
+            this.pingTracker = new AggregatePingTracker(this.config, new AggregateAddressDetector(ClientState));
 
             InitIpc();
 
-            this.ui = new PingUI(this.pingTracker, PluginInterface, this.config);
+            this.ui = new PingUI(this.pingTracker, PluginInterface, DtrBar, this.config);
+            this.pingTracker.OnPingUpdated += this.ui.UpdateDtrBarPing;
 
             PluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
             PluginInterface.UiBuilder.Draw += this.ui.BuildUi;
@@ -105,7 +109,6 @@ namespace PingPlugin
             this.ui.ConfigVisible = true;
         }
 
-        #region IDisposable Support
         protected virtual void Dispose(bool disposing)
         {
             if (!disposing) return;
@@ -117,6 +120,9 @@ namespace PingPlugin
 
             this.config.Save();
 
+            this.pingTracker.OnPingUpdated -= this.ui.UpdateDtrBarPing;
+            this.ui.Dispose();
+
             this.pingTracker.Dispose();
         }
 
@@ -125,6 +131,5 @@ namespace PingPlugin
             Dispose(true);
             GC.SuppressFinalize(this);
         }
-        #endregion
     }
 }

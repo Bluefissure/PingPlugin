@@ -1,7 +1,7 @@
 ﻿using Dalamud.Logging;
+using PingPlugin.GameAddressDetectors;
 using System;
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Linq;
 using System.Net;
 using System.Threading;
@@ -11,36 +11,35 @@ namespace PingPlugin.PingTrackers
 {
     public abstract class PingTracker : IDisposable
     {
-        private readonly int pid;
-
         private readonly CancellationTokenSource tokenSource;
+        private readonly GameAddressDetector addressDetector;
         protected readonly PingConfiguration config;
 
+        public bool Verbose { get; set; } = true;
+        public bool Errored { get; set; }
         public bool Reset { get; set; }
         public double AverageRTT { get; private set; }
         public IPAddress SeAddress { get; protected set; }
-        public long SeAddressRaw { get; protected set; }
-        public WinError LastError { get; protected set; }
         public ulong LastRTT { get; protected set; }
         public ConcurrentQueue<float> RTTTimes { get; private set; }
 
-        protected PingTracker(PingConfiguration config)
+        public delegate void PingUpdatedDelegate(PingStatsPayload payload);
+        public event PingUpdatedDelegate OnPingUpdated;
+
+        protected PingTracker(PingConfiguration config, GameAddressDetector addressDetector)
         {
             this.tokenSource = new CancellationTokenSource();
             this.config = config;
+            this.addressDetector = addressDetector;
 
-            this.pid = Process.GetProcessesByName("ffxiv_dx11")[0].Id;
-
-            UpdateSeAddress();
-
-            LastError = WinError.NO_ERROR;
+            SeAddress = IPAddress.Loopback;
             RTTTimes = new ConcurrentQueue<float>();
 
             Task.Run(() => AddressUpdateLoop(this.tokenSource.Token));
             Task.Run(() => PingLoop(this.tokenSource.Token));
         }
 
-        protected void NextRTTCalculation(long nextRTT)
+        protected void NextRTTCalculation(ulong nextRTT)
         {
             lock (RTTTimes)
             {
@@ -51,24 +50,37 @@ namespace PingPlugin.PingTrackers
             }
             CalcAverage();
 
-            LastRTT = (ulong)nextRTT;
+            LastRTT = nextRTT;
+            SendMessage();
         }
 
-        protected void CalcAverage() => AverageRTT = RTTTimes.Average();
+        protected void CalcAverage() => AverageRTT = RTTTimes.Count > 1 ? RTTTimes.Average() : 0;
 
-        protected void ResetRTT() => RTTTimes = new ConcurrentQueue<float>();
+        protected virtual void ResetRTT()
+        {
+            RTTTimes = new ConcurrentQueue<float>();
+            AverageRTT = 0;
+            LastRTT = 0;
+        }
 
         protected abstract Task PingLoop(CancellationToken token);
 
         private async Task AddressUpdateLoop(CancellationToken token)
         {
-            while (true)
+            while (!token.IsCancellationRequested)
             {
-                if (token.IsCancellationRequested)
-                    token.ThrowIfCancellationRequested();
                 var lastAddress = SeAddress;
-                UpdateSeAddress();
-                if (!lastAddress.Equals(SeAddress))
+
+                try
+                {
+                    SeAddress = this.addressDetector.GetAddress(Verbose);
+                }
+                catch (Exception e)
+                {
+                    PluginLog.LogError(e, "Exception thrown in address detection function.");
+                }
+
+                if (!Equals(lastAddress, SeAddress))
                 {
                     Reset = true;
                     ResetRTT();
@@ -81,12 +93,16 @@ namespace PingPlugin.PingTrackers
             }
         }
 
-        private void UpdateSeAddress()
+        public void ForceSendMessage() => SendMessage();
+
+        private void SendMessage()
         {
-            var address = NetUtils.GetXIVServerAddress(this.pid);
-            SeAddressRaw = BitConverter.ToUInt32(address.GetAddressBytes(), 0);
-            PluginLog.LogDebug("Got FFXIV server address {Address}", SeAddressRaw);
-            SeAddress = address;
+            var del = OnPingUpdated;
+            del?.Invoke(new PingStatsPayload
+            {
+                AverageRTT = Convert.ToUInt64(AverageRTT),
+                LastRTT = LastRTT,
+            });
         }
 
         #region IDisposable Support
