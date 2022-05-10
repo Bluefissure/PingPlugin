@@ -12,6 +12,7 @@ using System.IO;
 using System.Linq;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using Dalamud.Interface.Windowing;
 
 namespace PingPlugin
 {
@@ -81,7 +82,7 @@ namespace PingPlugin
 #endif
         }
 
-        public void BuildUi()
+        public void Draw()
         {
             var serverBarShown = this.config.DisplayMode == DisplayMode.ServerBar;
             if (this.dtrEntry != null && this.dtrEntry.Shown != serverBarShown)
@@ -109,7 +110,7 @@ namespace PingPlugin
         private bool fontScaleTooSmall;
         private void DrawConfigUi()
         {
-            ImGui.Begin($"{Loc.Localize("ConfigurationWindowTitle", string.Empty)}##PingPlugin Configuration",
+            ImGui.Begin($"{Loc.Localize("ConfigurationWindowTitle", string.Empty)}###PingPluginConfiguration",
                             ref this.configVisible,
                             ImGuiWindowFlags.NoResize | ImGuiWindowFlags.AlwaysAutoResize);
             var lockWindows = this.config.LockWindows;
@@ -238,7 +239,7 @@ namespace PingPlugin
             }
 
             var currentItem = (int)this.config.RuntimeLang;
-            var supportedLanguages = new[] { Loc.Localize("English", string.Empty), Loc.Localize("Japanese", string.Empty), Loc.Localize("Spanish", string.Empty), Loc.Localize("German", string.Empty), Loc.Localize("French", string.Empty),  Loc.Localize("Chinese", string.Empty) };
+            var supportedLanguages = new[] { "English", "日本語", "Español", "Deutsch", "Français",  "中文" };
             if (ImGui.Combo(Loc.Localize("Language", string.Empty), ref currentItem, supportedLanguages, supportedLanguages.Length))
             {
                 this.config.RuntimeLang = (LangKind)currentItem;
@@ -270,7 +271,7 @@ namespace PingPlugin
 
             ImGui.SetNextWindowBgAlpha(this.config.MonitorBgAlpha);
 
-            ImGui.Begin("PingMonitor", windowFlags);
+            ImGui.Begin("PingMonitor###PingPluginMonitor", windowFlags);
             if (this.resettingMonitorPos)
             {
                 ImGui.SetWindowPos(this.config.MonitorPosition);
@@ -373,7 +374,7 @@ namespace PingPlugin
             ImGui.SetNextWindowSize(new Vector2(350 + this.config.FontScale * (1.5f / positionScaleFactor), 185 + this.config.FontScale * positionScaleFactor), ImGuiCond.Always);
 
             ImGui.PushStyleVar(ImGuiStyleVar.WindowTitleAlign, new Vector2(0.5f, 0.5f));
-            ImGui.Begin($"{Loc.Localize("UIGraphTitle", string.Empty)}##Ping Graph", windowFlags);
+            ImGui.Begin($"{Loc.Localize("UIGraphTitle", string.Empty)}###PingPluginGraph", windowFlags);
             ImGui.PopStyleVar();
 
             if (this.resettingGraphPos)
@@ -445,9 +446,7 @@ namespace PingPlugin
                 var fontPx = Math.Min(Math.Max(8, this.config.FontScale), 128);
 
                 {
-                    var jpRangeHandle = GCHandle.Alloc(GlyphRangesChinese.GlyphRanges, GCHandleType.Pinned);
-                    this.uiFont = ImGui.GetIO().Fonts.AddFontFromFileTTF(filePath, fontPx, null, jpRangeHandle.AddrOfPinnedObject());
-                    jpRangeHandle.Free();
+                    this.uiFont = ImGui.GetIO().Fonts.AddFontFromFileTTF(filePath, fontPx, null, ImGui.GetIO().Fonts.GetGlyphRangesChineseSimplifiedCommon());
                 }
             }
             catch (Exception e)

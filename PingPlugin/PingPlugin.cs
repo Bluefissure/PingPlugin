@@ -1,7 +1,6 @@
 ﻿using Dalamud.Game.ClientState;
 using Dalamud.Game.Command;
 using Dalamud.Game.Gui.Dtr;
-using Dalamud.IoC;
 using Dalamud.Logging;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
@@ -10,26 +9,13 @@ using PingPlugin.GameAddressDetectors;
 using PingPlugin.PingTrackers;
 using System;
 using System.Dynamic;
+using Dalamud.Game.Network;
 
 namespace PingPlugin
 {
     public class PingPlugin : IDalamudPlugin
     {
-        [PluginService]
-        [RequiredVersion("1.0")]
-        public static DalamudPluginInterface PluginInterface { get; set; }
-
-        [PluginService]
-        [RequiredVersion("1.0")]
-        public static CommandManager Commands { get; set; }
-
-        [PluginService]
-        [RequiredVersion("1.0")]
-        public static ClientState ClientState { get; set; }
-
-        [PluginService]
-        [RequiredVersion("1.0")]
-        public static DtrBar DtrBar { get; set; }
+        private readonly DalamudPluginInterface pluginInterface;
 
         private readonly PluginCommandManager<PingPlugin> pluginCommandManager;
         private readonly PingConfiguration config;
@@ -41,29 +27,37 @@ namespace PingPlugin
 
         public string Name => "PingPlugin";
 
-        public PingPlugin()
+        public PingPlugin(
+            DalamudPluginInterface pluginInterface,
+            CommandManager commands,
+            ClientState clientState,
+            DtrBar dtrBar,
+            GameNetwork network)
         {
-            this.config = (PingConfiguration)PluginInterface.GetPluginConfig() ?? new PingConfiguration();
-            this.config.Initialize(PluginInterface);
+            this.pluginInterface = pluginInterface;
+            
+            this.config = (PingConfiguration)this.pluginInterface.GetPluginConfig() ?? new PingConfiguration();
+            this.config.Initialize(this.pluginInterface);
 
-            this.pingTracker = new AggregatePingTracker(this.config, new AggregateAddressDetector(ClientState));
+            this.pingTracker = new AggregatePingTracker(this.config, new AggregateAddressDetector(clientState), network);
+            this.pingTracker.Start();
 
             InitIpc();
 
-            this.ui = new PingUI(this.pingTracker, PluginInterface, DtrBar, this.config);
+            this.ui = new PingUI(this.pingTracker, this.pluginInterface, dtrBar, this.config);
             this.pingTracker.OnPingUpdated += this.ui.UpdateDtrBarPing;
 
-            PluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
-            PluginInterface.UiBuilder.Draw += this.ui.BuildUi;
+            this.pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
+            this.pluginInterface.UiBuilder.Draw += this.ui.Draw;
 
-            this.pluginCommandManager = new PluginCommandManager<PingPlugin>(this, Commands);
+            this.pluginCommandManager = new PluginCommandManager<PingPlugin>(this, commands);
         }
 
         private void InitIpc()
         {
             try
             {
-                IpcProvider = PluginInterface.GetIpcProvider<object, object>("PingPlugin.Ipc");
+                IpcProvider = this.pluginInterface.GetIpcProvider<object, object>("PingPlugin.Ipc");
                 this.pingTracker.OnPingUpdated += payload =>
                 {
                     dynamic obj = new ExpandoObject();
@@ -84,7 +78,7 @@ namespace PingPlugin
         public void PingCommand(string command, string args)
         {
             this.config.MonitorIsVisible = !this.config.MonitorIsVisible;
-            this.config.Save(); // If you kill the game, nothing is disposed. So, we save changes after they're made.
+            this.config.Save();
         }
 
         [Command("/pinggraph")]
@@ -112,11 +106,11 @@ namespace PingPlugin
         protected virtual void Dispose(bool disposing)
         {
             if (!disposing) return;
-
+            
             this.pluginCommandManager.Dispose();
 
-            PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
-            PluginInterface.UiBuilder.Draw -= this.ui.BuildUi;
+            this.pluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
+            this.pluginInterface.UiBuilder.Draw -= this.ui.Draw;
 
             this.config.Save();
 
