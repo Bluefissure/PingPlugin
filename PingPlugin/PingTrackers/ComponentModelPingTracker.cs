@@ -11,7 +11,7 @@ namespace PingPlugin.PingTrackers
     {
         private readonly Ping ping;
 
-        public ComponentModelPingTracker(PingConfiguration config, GameAddressDetector addressDetector) : base(config, addressDetector)
+        public ComponentModelPingTracker(PingConfiguration config, GameAddressDetector addressDetector) : base(config, addressDetector, PingTrackerKind.COM)
         {
             this.ping = new Ping();
         }
@@ -32,10 +32,15 @@ namespace PingPlugin.PingTrackers
                         {
                             NextRTTCalculation((ulong)pingReply.RoundtripTime);
                         }
-                        else
+                        else if (pingReply.Status != IPStatus.TimedOut)
                         {
-                            PluginLog.LogWarning($"Got bad status {pingReply.Status} when executing ping - this may be temporary and acceptable.");
+                            PluginLog.LogWarning(
+                                $"Got bad status {pingReply.Status} when executing ping - this may be temporary and acceptable.");
                         }
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // ignored
                     }
                     catch (Exception e)
                     {

@@ -1,6 +1,6 @@
 ﻿using System;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.Network;
@@ -9,26 +9,30 @@ using PingPlugin.GameAddressDetectors;
 
 namespace PingPlugin.PingTrackers
 {
+    /// <summary>
+    /// Packet-based ping tracker. This should work reliably on all platforms. It uses the Win32 API
+    /// function QueryPerformanceCounter, but the game also uses this function to calculate ping, so
+    /// there shouldn't be any issue with this.
+    /// </summary>
     public class PacketPingTracker : PingTracker
     {
         private readonly GameNetwork network;
-        private readonly Stopwatch pingTimer;
         
+        // Various fields used for opcode prediction
         private Timer predictionTimeout;
         
         private bool predictedUpOpcodeSet;
-        private uint predictedUpOpcodeTimestamp;
         private ushort predictedUpOpcode;
+        private uint predictedUpOpcodeTimestamp;
         
         private bool predictedDownOpcodeSet;
         private ushort predictedDownOpcode;
 
         private long pingMs;
+        private bool gotPing;
 
-        public PacketPingTracker(PingConfiguration config, GameAddressDetector addressDetector, GameNetwork network) : base(config, addressDetector)
+        public PacketPingTracker(PingConfiguration config, GameAddressDetector addressDetector, GameNetwork network) : base(config, addressDetector, PingTrackerKind.Packets)
         {
-            this.pingTimer = new Stopwatch();
-            
             this.network = network;
             this.network.NetworkMessage += OnNetworkMessage;
         }
@@ -37,8 +41,14 @@ namespace PingPlugin.PingTrackers
         {
             while (!token.IsCancellationRequested)
             {
-                NextRTTCalculation((ulong) this.pingMs);
-                await Task.Delay(3000, token);
+                if (this.gotPing && this.pingMs >= 0)
+                {
+                    NextRTTCalculation((ulong)this.pingMs);
+                    this.gotPing = false;
+                }
+                
+                // This pair of packets arrives every 10 seconds
+                await Task.Delay(TimeSpan.FromSeconds(10), token);
             }
         }
 
@@ -51,26 +61,27 @@ namespace PingPlugin.PingTrackers
             // ping calculation.
             
             // Predict the up/down Ping opcodes
-            if (this.predictedUpOpcodeSet && !this.predictedDownOpcodeSet && direction == NetworkMessageDirection.ZoneDown)
+            if (!this.predictedUpOpcodeSet && direction == NetworkMessageDirection.ZoneUp)
             {
-                CheckPredictedPingDown(dataPtr, opcode);
-            }
-            else if (!this.predictedUpOpcodeSet && direction == NetworkMessageDirection.ZoneUp)
-            {
+                // Client send, executes first
                 TrackPredictedPingUp(dataPtr, opcode);
+            }
+            else if (this.predictedUpOpcodeSet && !this.predictedDownOpcodeSet && direction == NetworkMessageDirection.ZoneDown)
+            {
+                // Server send, executes last
+                CheckPredictedPingDown(dataPtr, opcode);
             }
 
             // Calculate ping
             if (this.predictedDownOpcodeSet && this.predictedUpOpcodeSet)
             {
-                CalculatePing(opcode, direction);
+                CalculatePing(dataPtr, opcode, direction);
             }
         }
 
         private void CheckPredictedPingDown(IntPtr dataPtr, ushort opcode)
         {
             var timestamp = (uint) Marshal.ReadInt32(dataPtr);
-
             if (timestamp == this.predictedUpOpcodeTimestamp)
             {
                 this.predictedDownOpcode = opcode;
@@ -89,16 +100,12 @@ namespace PingPlugin.PingTrackers
 
         private void TrackPredictedPingUp(IntPtr dataPtr, ushort opcode)
         {
-            var timestamp = (uint) Marshal.ReadInt32(dataPtr);
-
+            this.predictedUpOpcodeTimestamp = (uint) Marshal.ReadInt32(dataPtr);
+            
             this.predictedUpOpcode = opcode;
-            this.predictedUpOpcodeTimestamp = timestamp;
             this.predictedUpOpcodeSet = true;
-                
-            this.pingTimer.Reset();
-            this.pingTimer.Start();
-
-            // Set a timer for 15 seconds, after which we go back to checking PingUp opcodes
+            
+            // Set a timer for 2 seconds, after which we go back to checking PingUp opcodes
             this.predictionTimeout?.Dispose();
             this.predictionTimeout = new Timer(_ =>
             {
@@ -112,7 +119,7 @@ namespace PingPlugin.PingTrackers
                     }
                 }
             });
-            this.predictionTimeout.Change(Timeout.InfiniteTimeSpan, new TimeSpan(0, 0, 15));
+            this.predictionTimeout.Change(TimeSpan.FromSeconds(2), Timeout.InfiniteTimeSpan);
 
             if (Verbose)
             {
@@ -120,24 +127,28 @@ namespace PingPlugin.PingTrackers
             }
         }
 
-        private void CalculatePing(ushort opcode, NetworkMessageDirection direction)
+        private void CalculatePing(IntPtr dataPtr, ushort opcode, NetworkMessageDirection direction)
         {
-            // ReSharper disable once ConvertIfStatementToSwitchStatement
-            if (direction == NetworkMessageDirection.ZoneUp && opcode == this.predictedUpOpcode)
+            if (direction == NetworkMessageDirection.ZoneDown && opcode == this.predictedDownOpcode)
             {
-                this.pingTimer.Restart();
-            }
-            else if (direction == NetworkMessageDirection.ZoneDown && opcode == this.predictedDownOpcode)
-            {
-                if (this.pingTimer.IsRunning)
+                // The response packet has the same timestamp as the request packet, so we can just
+                // take it from here instead of keeping state.
+                var prevMs = (uint) Marshal.ReadInt32(dataPtr);
+                
+                if (QueryPerformanceCounter(out var nextNs))
                 {
-                    this.pingTimer.Stop();
-                    this.pingMs = this.pingTimer.ElapsedMilliseconds;
+                    var nextMs = nextNs / 10000;
+                    this.pingMs = nextMs - prevMs;
+                    this.gotPing = true;
 
                     if (Verbose)
                     {
                         PluginLog.LogDebug("Packet ping: {LastPing}ms", this.pingMs);
                     }
+                }
+                else
+                {
+                    PluginLog.LogError("Failed to call QueryPerformanceCounter! (How can this happen?)");
                 }
             }
         }
@@ -152,5 +163,12 @@ namespace PingPlugin.PingTrackers
             
             base.Dispose(disposing);
         }
+        
+        // http://pinvoke.net/default.aspx/kernel32.QueryPerformanceCounter
+        // "For this particular method, execution time is often critical. ... This will prevent the
+        // runtime from doing a security stack walk at runtime."
+        [SuppressUnmanagedCodeSecurity]
+        [DllImport("kernel32.dll")]
+        private static extern bool QueryPerformanceCounter(out long lpPerformanceCount);
     }
 }
