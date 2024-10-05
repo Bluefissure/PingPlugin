@@ -9,13 +9,15 @@ using System.Dynamic;
 using Dalamud.Game.Command;
 using Dalamud.Game.Gui.Dtr;
 using Dalamud.Game.Network;
+using Dalamud.Plugin.Services;
 
 namespace PingPlugin
 {
     public class PingPlugin : IDalamudPlugin
     {
-        private readonly DalamudPluginInterface pluginInterface;
-        private readonly GameNetwork network;
+        private readonly IDalamudPluginInterface pluginInterface;
+        private readonly IGameNetwork network;
+        private readonly IPluginLog pluginLog;
 
         private readonly PluginCommandManager<PingPlugin> pluginCommandManager;
         private readonly PingConfiguration config;
@@ -29,13 +31,14 @@ namespace PingPlugin
 
         public string Name => "PingPlugin";
 
-        public PingPlugin(DalamudPluginInterface pluginInterface, CommandManager commands, DtrBar dtrBar, GameNetwork network)
+        public PingPlugin(IDalamudPluginInterface pluginInterface, ICommandManager commands, IDtrBar dtrBar, IGameNetwork network, IPluginLog pluginLog)
         {
             this.pluginInterface = pluginInterface;
             this.network = network;
+            this.pluginLog = pluginLog;
             
             this.config = (PingConfiguration)this.pluginInterface.GetPluginConfig() ?? new PingConfiguration();
-            this.config.Initialize(this.pluginInterface);
+            this.config.Initialize(this.pluginInterface, this.pluginLog);
 
             this.addressDetector = this.pluginInterface.Create<AggregateAddressDetector>();
             if (this.addressDetector == null)
@@ -45,13 +48,12 @@ namespace PingPlugin
             
             this.pingTracker = RequestNewPingTracker(this.config.TrackingMode);
             this.pingTracker.Verbose = false;
-            this.pingTracker.Start();
 
             InitIpc();
 
             // Most of these can't be created using service injection because the service container only checks ctors for
             // exact types.
-            this.ui = new PingUI(this.pingTracker, this.pluginInterface, dtrBar, this.config, RequestNewPingTracker);
+            this.ui = new PingUI(this.pingTracker, this.pluginInterface, dtrBar, this.config, RequestNewPingTracker, pluginLog);
             this.pingTracker.OnPingUpdated += this.ui.UpdateDtrBarPing;
 
             this.pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
@@ -66,10 +68,10 @@ namespace PingPlugin
             
             PingTracker newTracker = kind switch
             {
-                PingTrackerKind.Aggregate => new AggregatePingTracker(this.config, this.addressDetector, this.network),
-                PingTrackerKind.COM => new ComponentModelPingTracker(this.config, this.addressDetector),
-                PingTrackerKind.IpHlpApi => new IpHlpApiPingTracker(this.config, this.addressDetector),
-                PingTrackerKind.Packets => new PacketPingTracker(this.config, this.addressDetector, this.network),
+                PingTrackerKind.Aggregate => new AggregatePingTracker(this.config, this.addressDetector, this.network, this.pluginLog),
+                PingTrackerKind.COM => new ComponentModelPingTracker(this.config, this.addressDetector, this.pluginLog),
+                PingTrackerKind.IpHlpApi => new IpHlpApiPingTracker(this.config, this.addressDetector, this.pluginLog),
+                PingTrackerKind.Packets => new PacketPingTracker(this.config, this.addressDetector, this.network, this.pluginLog),
                 _ => throw new ArgumentOutOfRangeException(nameof(kind)),
             };
 
@@ -99,7 +101,7 @@ namespace PingPlugin
             }
             catch (Exception e)
             {
-                PluginLog.Error($"Error registering IPC provider:\n{e}");
+                pluginLog.Error($"Error registering IPC provider:\n{e}");
             }
         }
 

@@ -1,4 +1,5 @@
 ﻿using Dalamud.Game.Command;
+using Dalamud.Plugin.Services;
 using PingPlugin.Attributes;
 using System;
 using System.Collections.Generic;
@@ -11,11 +12,11 @@ namespace PingPlugin
 {
     public class PluginCommandManager<THost> : IDisposable
     {
-        private readonly CommandManager commandManager;
+        private readonly ICommandManager commandManager;
         private readonly (string, CommandInfo)[] pluginCommands;
         private readonly THost host;
 
-        public PluginCommandManager(THost host, CommandManager commandManager)
+        public PluginCommandManager(THost host, ICommandManager commandManager)
         {
             this.commandManager = commandManager;
             this.host = host;
@@ -52,7 +53,7 @@ namespace PingPlugin
 
         private IEnumerable<(string, CommandInfo)> GetCommandInfoTuple(MethodInfo method)
         {
-            var handlerDelegate = (HandlerDelegate)Delegate.CreateDelegate(typeof(HandlerDelegate), this.host, method);
+            var handlerDelegate = (IReadOnlyCommandInfo.HandlerDelegate)Delegate.CreateDelegate(typeof(IReadOnlyCommandInfo.HandlerDelegate), this.host, method);
 
             var command = handlerDelegate.Method.GetCustomAttribute<CommandAttribute>();
             var aliases = handlerDelegate.Method.GetCustomAttribute<AliasesAttribute>();

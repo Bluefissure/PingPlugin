@@ -3,6 +3,7 @@ using Dalamud.Game.Gui.Dtr;
 using Dalamud.Interface;
 using Dalamud.Logging;
 using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
 using ImGuiNET;
 using PingPlugin.PingTrackers;
 using System;
@@ -11,26 +12,31 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Threading;
+using Dalamud;
+using Dalamud.Interface.ManagedFontAtlas;
 
 namespace PingPlugin
 {
     public class PingUI : IDisposable
     {
-        private readonly UiBuilder uiBuilder;
-        private readonly DtrBarEntry dtrEntry;
-        private readonly DalamudPluginInterface pluginInterface;
+        private readonly IUiBuilder uiBuilder;
+        private readonly IDalamudPluginInterface pluginInterface;
         private readonly PingConfiguration config;
+        private readonly IPluginLog pluginLog;
 
         private readonly Func<PingTrackerKind, PingTracker> requestPingTracker;
-        
+
         private PingTracker pingTracker;
 
         private bool resettingGraphPos;
         private bool resettingMonitorPos;
         private bool configVisible;
-
+        private Thread dtrEntryLoadThread;
+        private IDtrBarEntry dtrEntry;
         private bool fontLoaded;
-        private ImFontPtr uiFont;
+        private IFontHandle uiFont;
+        private bool disposing;
 
         public bool CutsceneActive { get; set; }
 
@@ -40,46 +46,20 @@ namespace PingPlugin
             set => this.configVisible = value;
         }
 
-        public PingUI(PingTracker pingTracker, DalamudPluginInterface pluginInterface, DtrBar dtrBar, PingConfiguration config, Func<PingTrackerKind, PingTracker> requestPingTracker)
+        public PingUI(PingTracker pingTracker, IDalamudPluginInterface pluginInterface, IDtrBar dtrBar,
+            PingConfiguration config, Func<PingTrackerKind, PingTracker> requestPingTracker, IPluginLog pluginLog)
         {
             this.config = config;
             this.uiBuilder = pluginInterface.UiBuilder;
             this.pingTracker = pingTracker;
             this.pluginInterface = pluginInterface;
+            this.pluginLog = pluginLog;
 
             this.requestPingTracker = requestPingTracker;
 
-            var dtrBarTitle = "Ping";
-            try
-            {
-                this.dtrEntry = dtrBar.Get(dtrBarTitle);
-            }
-            catch (ArgumentException e)
-            {
-                // This usually only runs once after any given plugin reload
-                for (var i = 0; i < 5; i++)
-                {
-                    PluginLog.LogError(e, $"Failed to acquire DtrBarEntry {dtrBarTitle}, trying {dtrBarTitle}{i}");
-                    try
-                    {
-                        this.dtrEntry = dtrBar.Get(dtrBarTitle + i);
-                    }
-                    catch (ArgumentException)
-                    {
-                        continue;
-                    }
+            InitializeDtrBar(dtrBar);
 
-                    break;
-                }
-            }
-
-            if (this.dtrEntry != null)
-            {
-                this.dtrEntry.Text = "Pinging...";
-                this.dtrEntry.Shown = false;
-            }
-
-            this.uiBuilder.BuildFonts += BuildFont;
+            this.BuildFont();
 #if DEBUG
             ConfigVisible = true;
 #endif
@@ -98,24 +78,54 @@ namespace PingPlugin
 
             if (!this.fontLoaded)
             {
-                this.uiBuilder.RebuildFonts();
+                this.BuildFont();
                 return;
             }
 
             if (ConfigVisible) DrawConfigUi();
 
-            if (this.uiFont.IsLoaded()) ImGui.PushFont(this.uiFont);
-            if (this.config.GraphIsVisible) DrawGraph();
-            if (!serverBarShown && this.config.MonitorIsVisible) DrawMonitor();
-            if (this.uiFont.IsLoaded()) ImGui.PopFont();
+            using (this.uiFont.Push())
+            {
+                if (this.config.GraphIsVisible) DrawGraph();
+                if (!serverBarShown && this.config.MonitorIsVisible) DrawMonitor();
+            }
+        }
+
+        private void InitializeDtrBar(IDtrBar dtrBar)
+        {
+            this.dtrEntryLoadThread = new Thread(() =>
+            {
+                var dtrBarTitle = "Ping";
+
+                // This usually only runs once after any given plugin reload
+                for (var i = 0; this.dtrEntry == null; i++)
+                {
+                    if (this.disposing) break;
+
+                    try
+                    {
+                        this.dtrEntry = dtrBar.Get(dtrBarTitle + i);
+                        this.dtrEntry.Text = "Pinging...";
+                        this.dtrEntry.Shown = false;
+                    }
+                    catch (Exception e)
+                    {
+                        pluginLog.Error(e,
+                            $"Failed to acquire DtrBarEntry {dtrBarTitle}, trying {dtrBarTitle}{i + 1}");
+                        Thread.Sleep(100);
+                    }
+                }
+            });
+            this.dtrEntryLoadThread.Start();
         }
 
         private bool fontScaleTooSmall;
+
         private void DrawConfigUi()
         {
             ImGui.Begin($"{Loc.Localize("ConfigurationWindowTitle", string.Empty)}###PingPluginConfiguration",
-                            ref this.configVisible,
-                            ImGuiWindowFlags.NoResize | ImGuiWindowFlags.AlwaysAutoResize);
+                ref this.configVisible,
+                ImGuiWindowFlags.NoResize | ImGuiWindowFlags.AlwaysAutoResize);
             var lockWindows = this.config.LockWindows;
             if (ImGui.Checkbox(Loc.Localize("LockPluginWindows", string.Empty), ref lockWindows))
             {
@@ -135,16 +145,17 @@ namespace PingPlugin
             var trackerKinds = Enum.GetValues<PingTrackerKind>();
             var trackerNames = trackerKinds.Select(t => t.FormatName()).ToArray();
             var tracker = (int)this.pingTracker.Kind;
-            if (ImGui.Combo(Loc.Localize("PingTracker", "Ping Tracker"), ref tracker, trackerNames, trackerNames.Length))
+            if (ImGui.Combo(Loc.Localize("PingTracker", "Ping Tracker"), ref tracker, trackerNames,
+                    trackerNames.Length))
             {
                 var trackerKind = (PingTrackerKind)tracker;
-                
+
                 this.config.TrackingMode = trackerKind;
                 this.config.Save();
-                
+
                 this.pingTracker = this.requestPingTracker(trackerKind);
             }
-            
+
             ImGui.Spacing();
 
             var displayModes = Enum.GetNames<DisplayMode>();
@@ -165,6 +176,7 @@ namespace PingPlugin
                         this.config.HideAveragePing = hideAveragePing;
                         this.config.Save();
                     }
+
                     break;
                 case DisplayMode.Micro:
                     var microDisplayLast = this.config.MicroDisplayLast;
@@ -180,6 +192,7 @@ namespace PingPlugin
                         this.config.MicroDisplayAverage = microDisplayAverage;
                         this.config.Save();
                     }
+
                     break;
                 case DisplayMode.Minimal:
                     break;
@@ -200,6 +213,7 @@ namespace PingPlugin
                         this.pingTracker.ForceSendMessage();
                         this.config.Save();
                     }
+
                     break;
                 default:
                     throw new ArgumentOutOfRangeException();
@@ -216,9 +230,10 @@ namespace PingPlugin
 
             if (this.fontScaleTooSmall)
             {
-                this.uiBuilder.RebuildFonts();
+                this.uiBuilder.FontAtlas.BuildFontsAsync();
                 this.fontScaleTooSmall = false;
             }
+
             var fontScale = (int)this.config.FontScale;
             if (ImGui.InputInt(Loc.Localize("FontScale", string.Empty), ref fontScale))
             {
@@ -226,12 +241,13 @@ namespace PingPlugin
                 this.config.Save();
                 if (this.config.FontScale >= 8)
                 {
-                    this.uiBuilder.RebuildFonts();
+                    this.uiBuilder.FontAtlas.BuildFontsAsync();
                 }
                 else
                 {
                     this.fontScaleTooSmall = true;
                 }
+
                 this.config.FontScale = Math.Max(8f, fontScale);
             }
 
@@ -257,8 +273,9 @@ namespace PingPlugin
             }
 
             var currentItem = (int)this.config.RuntimeLang;
-            var supportedLanguages = new[] { "English", "日本語", "Español", "Deutsch", "Français",  "中文" };
-            if (ImGui.Combo(Loc.Localize("Language", string.Empty), ref currentItem, supportedLanguages, supportedLanguages.Length))
+            var supportedLanguages = new[] { "English", "日本語", "Español", "Deutsch", "Français", "中文" };
+            if (ImGui.Combo(Loc.Localize("Language", string.Empty), ref currentItem, supportedLanguages,
+                    supportedLanguages.Length))
             {
                 this.config.RuntimeLang = (LangKind)currentItem;
                 this.config.Save();
@@ -277,12 +294,14 @@ namespace PingPlugin
                 this.resettingGraphPos = true;
                 this.resettingMonitorPos = true;
             }
+
             ImGui.End();
         }
 
         private void DrawMonitor()
         {
-            var windowFlags = BuildWindowFlags(ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.AlwaysAutoResize);
+            var windowFlags = BuildWindowFlags(ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoTitleBar |
+                                               ImGuiWindowFlags.AlwaysAutoResize);
 
             ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0);
             ImGui.SetNextWindowPos(this.config.MonitorPosition, ImGuiCond.FirstUseEver);
@@ -322,12 +341,14 @@ namespace PingPlugin
             var formatParameters = new List<object>();
             if (this.config.MinimalDisplay)
             {
-                formatString = Loc.Localize("UIMinimalDisplay" + (this.config.HideAveragePing ? "NoAverage" : ""), string.Empty);
+                formatString = Loc.Localize("UIMinimalDisplay" + (this.config.HideAveragePing ? "NoAverage" : ""),
+                    string.Empty);
                 formatParameters.Add(this.pingTracker.LastRTT);
             }
             else
             {
-                formatString = Loc.Localize("UIRegularDisplay" + (this.config.HideAveragePing ? "NoAverage" : ""), string.Empty);
+                formatString = Loc.Localize("UIRegularDisplay" + (this.config.HideAveragePing ? "NoAverage" : ""),
+                    string.Empty);
                 formatParameters.Add(this.pingTracker.SeAddress);
                 formatParameters.Add(this.pingTracker.LastRTT);
             }
@@ -335,7 +356,8 @@ namespace PingPlugin
             if (!this.config.HideAveragePing)
                 formatParameters.Add(Math.Round(this.pingTracker.AverageRTT, 2));
 
-            ImGui.TextColored(this.config.MonitorFontColor, string.Format(CultureInfo.CurrentUICulture, formatString, formatParameters.ToArray()));
+            ImGui.TextColored(this.config.MonitorFontColor,
+                string.Format(CultureInfo.CurrentUICulture, formatString, formatParameters.ToArray()));
         }
 
         private void DrawMicroMonitor()
@@ -389,7 +411,9 @@ namespace PingPlugin
             const float positionScaleFactor = 0.79f;
 
             ImGui.SetNextWindowPos(this.config.GraphPosition, ImGuiCond.FirstUseEver);
-            ImGui.SetNextWindowSize(new Vector2(350 + this.config.FontScale * (1.5f / positionScaleFactor), 185 + this.config.FontScale * positionScaleFactor), ImGuiCond.Always);
+            ImGui.SetNextWindowSize(
+                new Vector2(350 + this.config.FontScale * (1.5f / positionScaleFactor),
+                    185 + this.config.FontScale * positionScaleFactor), ImGuiCond.Always);
 
             ImGui.PushStyleVar(ImGuiStyleVar.WindowTitleAlign, new Vector2(0.5f, 0.5f));
             ImGui.Begin($"{Loc.Localize("UIGraphTitle", string.Empty)}###PingPluginGraph", windowFlags);
@@ -433,7 +457,8 @@ namespace PingPlugin
                     ImGui.GetWindowDrawList().AddText(
                         avgLineEnd - new Vector2(0, this.config.FontScale / 2),
                         ImGui.GetColorU32(ImGuiCol.Text),
-                        Math.Round(this.pingTracker.AverageRTT, 2).ToString(CultureInfo.CurrentUICulture) + Loc.Localize("UIMillisecondAbbr", string.Empty));
+                        Math.Round(this.pingTracker.AverageRTT, 2).ToString(CultureInfo.CurrentUICulture) +
+                        Loc.Localize("UIMillisecondAbbr", string.Empty));
                     ImGui.GetWindowDrawList().AddText(
                         avgLineEnd - new Vector2(270, 18),
                         ImGui.GetColorU32(ImGuiCol.Text),
@@ -451,27 +476,20 @@ namespace PingPlugin
             }
             else
                 ImGui.Text(Loc.Localize("UINoData", string.Empty));
+
             ImGui.End();
         }
 
         private void BuildFont()
         {
-            try
+            this.uiFont = this.uiBuilder.FontAtlas.NewDelegateFontHandle(e => e.OnPreBuild(tk =>
             {
-                var filePath = Path.Combine(this.pluginInterface.DalamudAssetDirectory.FullName, "UIRes", "NotoSansCJKsc-Medium.otf");
-                if (!File.Exists(filePath)) throw new FileNotFoundException("Font file not found!");
-
                 var fontPx = Math.Min(Math.Max(8, this.config.FontScale), 128);
-
-                {
-                    this.uiFont = ImGui.GetIO().Fonts.AddFontFromFileTTF(filePath, fontPx, null, ImGui.GetIO().Fonts.GetGlyphRangesChineseSimplifiedCommon());
-                }
-            }
-            catch (Exception e)
-            {
-                PluginLog.LogError(e.Message);
-            }
-
+                var safeFontConfig = new SafeFontConfig() { SizePx = fontPx };
+                tk.AddDalamudAssetFont(DalamudAsset.NotoSansScMedium, safeFontConfig);
+                tk.AttachExtraGlyphsForDalamudLanguage(safeFontConfig);
+            }));
+            
             this.fontLoaded = true;
         }
 
@@ -489,9 +507,13 @@ namespace PingPlugin
 
         public void Dispose()
         {
+            if (this.disposing) return;
             GC.SuppressFinalize(this);
-            this.uiBuilder.BuildFonts -= BuildFont;
-            this.dtrEntry?.Dispose();
+
+            this.disposing = true;
+
+            this.dtrEntryLoadThread?.Join();
+            this.dtrEntry?.Remove();
         }
     }
 }
